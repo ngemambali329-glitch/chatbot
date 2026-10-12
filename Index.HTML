@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniZulu Engineering Chatbot</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#0d1526; --panel:#17213a; --user:#c62f3a; --bot:#f59e0b; --text:#e8ecf5; --muted:#9aa6c0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:16px; min-height:100vh; display:flex; flex-direction:column; }
+  h1 { margin:8px 0 0; font-size:1.7rem; }
+  .sub { color:var(--muted); font-size:.9rem; margin:2px 0 14px; }
+  #chat { flex:1; display:flex; flex-direction:column; gap:10px; padding-bottom:12px; }
+  .row { display:flex; gap:10px; align-items:flex-start; }
+  .avatar { flex:none; width:34px; height:34px; border-radius:8px; display:grid; place-items:center; font-size:18px; }
+  .row.user .avatar { background:var(--user); } .row.bot .avatar { background:var(--bot); }
+  .bubble { background:var(--panel); border-radius:12px; padding:8px 12px; max-width:calc(100% - 46px); overflow-wrap:anywhere; }
+  .bubble p { margin:0 0 .4em; } .bubble p:last-child { margin:0; }
+  .src { color:var(--muted); font-size:.8rem; margin-top:6px; }
+  details { margin-top:6px; color:var(--muted); font-size:.85rem; } details pre { white-space:pre-wrap; margin:6px 0 0; font:inherit; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+  .chip { background:var(--panel); color:var(--text); border:1px solid #2b3a5e; border-radius:999px; padding:6px 12px; cursor:pointer; font-size:.85rem; }
+  .chip:hover { border-color:var(--bot); }
+  form { position:sticky; bottom:0; display:flex; gap:8px; padding:12px 0 16px; background:linear-gradient(transparent, var(--bg) 30%); }
+  input { flex:1; padding:12px 14px; border-radius:12px; border:1px solid #2b3a5e; background:#1b2644; color:var(--text); font-size:1rem; }
+  button.send { padding:0 18px; border:0; border-radius:12px; background:var(--bot); color:#111; font-weight:600; cursor:pointer; font-size:1rem; }
+  #status { color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>⚡ UniZulu Engineering Chatbot</h1>
+  <div class="sub">Timetable • Calendar • Handbook &nbsp;|&nbsp; exact lookups + BM25 retrieval, running in your browser</div>
+  <div id="status">Loading the knowledge base…</div>
+  <div class="chips" id="chips"></div>
+  <div id="chat"></div>
+  <form id="form" autocomplete="off">
+    <input id="q" placeholder="Ask about your timetable, calendar, or handbook..." aria-label="Your question">
+    <button class="send" type="submit">Send</button>
+  </form>
+</main>
+
+<script>
+/* ======================================================================
+   Engine: a JavaScript port of chatbot/engine.py (same routing and scoring)
+   ====================================================================== */
+const OUT_OF_SCOPE = "That doesn't look like it's covered in the UniZulu Engineering timetable, calendar or handbook. Try rephrasing, or ask something from those documents.";
+const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const DAY_WORDS = {monday:"Monday",mon:"Monday",tuesday:"Tuesday",tue:"Tuesday",tues:"Tuesday",wednesday:"Wednesday",wed:"Wednesday",
+  thursday:"Thursday",thu:"Thursday",thur:"Thursday",thurs:"Thursday",friday:"Friday",fri:"Friday",saturday:"Saturday",sat:"Saturday",sunday:"Sunday",sun:"Sunday"};
+const MONTHS = ["JANUARY","FEBRUARY","MARCH","APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER","NOVEMBER","DECEMBER"];
+const MONTH_INDEX = Object.fromEntries(MONTHS.map((m,i)=>[m,i]));
+const CODE_RE = /\b\d[A-Z]{2,4}\d{2,3}[A-Z]?\b/;
+const CODE_RE_G = /\b\d[A-Z]{2,4}\d{2,3}[A-Z]?\b/g;
+const SCHEDULE_WORDS = new Set(["time","times","when","schedule","scheduled","timetable","class","classes","lecture","lectures","tutorial","tutorials","practical","practicals","venue","period","periods","slot","slots","meet","meets"]);
+const CAL_TRIGGERS = new Set(["recess","registration","semester","term","exam","exams","examination","examinations","holiday","holidays","closure","graduation","orientation","lecture","lectures","break","deadline","reopen","reopens","open","opens","closes","closing","calendar","special","supplementary","aegrotat"]);
+const CAL_STOP = new Set(["is","the","what","when","does","do","did","for","of","on","in","a","an","are","was","were","will","would","can","could","should","to","we","you","your","our","there","here","much","many","get","got","want","shall","have","has","had","date","dates","list","all","every","each","me","please","show","tell","about","start","starts","begin","begins","end","ends","finish","finishes","commence","commences","university","which","how","long","day"]);
+const CAL_SYNONYMS = [[/\bfirst semester\b/g,"semester i"],[/\bsecond semester\b/g,"semester ii"],[/\bsemester 1\b/g,"semester i"],[/\bsemester 2\b/g,"semester ii"],
+  [/\bterm 1\b/g,"term i"],[/\bterm 2\b/g,"term ii"],[/\bterm 3\b/g,"term iii"],[/\bterm 4\b/g,"term iv"],[/\bholidays?\b/g,"public holiday"],
+  [/\bbreak\b/g,"recess"],[/\breg\b/g,"registration"],[/\bexams?\b/g,"examinations"]];
+const START_WORDS = new Set(["start","starts","begin","begins","commence","commences","open","opens","opening"]);
+const END_WORDS = new Set(["end","ends","finish","finishes","close","closes","closing"]);
+const HB_STOP = new Set(["what","is","the","a","an","are","of","for","to","in","on","and","or","does","do","did","how","when","which","who","where","can","i","my","me","please","tell","about","need","needed","get","have","has","there"]);
+const HB_SYNONYMS = [[/\bmaths?\b/gi,"mathematics"],[/\bmatric\b/gi,"matriculation"],[/\bco-?ordinators?\b/gi,"co-ordinator"],[/\bphysics\b/gi,"physical"]];
+const BM25_THRESHOLD = 2.0, MIN_COVERAGE = 0.6;
+
+const tokenize = t => t.toLowerCase().match(/[a-z0-9]+/g) || [];
+function stem(word, n) {
+  let w = word.toLowerCase();
+  if (/\d/.test(w)) return w;
+  if (w.length > 4 && w.endsWith("s") && !w.endsWith("ss")) w = w.slice(0, -1);
+  return w.slice(0, n);
+}
+const intersectSize = (a, b) => { let c = 0; for (const x of a) if (b.has(x)) c++; return c; };
+
+class BM25 {  // same maths as the rank_bm25 library (Okapi, k1=1.5, b=0.75, epsilon=0.25)
+  constructor(corpus, k1 = 1.5, b = 0.75, epsilon = 0.25) {
+    this.k1 = k1; this.b = b; this.N = corpus.length;
+    this.docs = corpus.map(d => { const m = new Map(); for (const w of d) m.set(w, (m.get(w) || 0) + 1); return m; });
+    this.lens = corpus.map(d => d.length);
+    this.avgdl = this.lens.reduce((s, x) => s + x, 0) / this.N;
+    const nd = new Map();
+    for (const m of this.docs) for (const w of m.keys()) nd.set(w, (nd.get(w) || 0) + 1);
+    this.idf = new Map(); let sum = 0; const negative = [];
+    for (const [w, f] of nd) {
+      const v = Math.log(this.N - f + 0.5) - Math.log(f + 0.5);
+      this.idf.set(w, v); sum += v; if (v < 0) negative.push(w);
+    }
+    const eps = epsilon * (sum / nd.size);
+    for (const w of negative) this.idf.set(w, eps);
+  }
+  scores(query) {
+    const out = new Array(this.N).fill(0);
+    for (const q of query) {
+      const idf = this.idf.get(q) || 0;
+      for (let i = 0; i < this.N; i++) {
+        const f = this.docs[i].get(q) || 0;
+        out[i] += idf * (f * (this.k1 + 1) / (f + this.k1 * (1 - this.b + this.b * this.lens[i] / this.avgdl)));
+      }
+    }
+    return out;
+  }
+}
+
+class KnowledgeBase {
+  constructor(timetable, calendar, rawChunks, lines) {
+    this.timetable = timetable; this.calendar = calendar; this.lines = lines;
+    this.chunks = rawChunks.map(c => c.text); this.chunkStart = rawChunks.map(c => c.start);
+    this.calStems = calendar.map(e => new Set(tokenize(e[3]).map(t => stem(t, 4))));
+    this.calDf = new Map();
+    for (const s of this.calStems) for (const w of s) this.calDf.set(w, (this.calDf.get(w) || 0) + 1);
+    this.calN = calendar.length;
+    this.bm25 = new BM25(this.chunks.map(c => tokenize(c).map(t => stem(t, 5))));
+  }
+  calIdf(w) { return Math.log(1 + this.calN / (1 + (this.calDf.get(stem(w, 4)) || 0))); }
+}
+
+/* ---- 1. timetable ---- */
+const findModuleCode = q => { const m = q.toUpperCase().match(CODE_RE); return m ? m[0] : null; };
+const findDay = q => { for (const w of tokenize(q)) if (DAY_WORDS[w]) return DAY_WORDS[w]; return null; };
+const isScheduleQuestion = q => !!findDay(q) || tokenize(q).some(w => SCHEDULE_WORDS.has(w));
+function lookupSchedule(kb, code, day) {
+  code = code.toUpperCase();
+  let hits = kb.timetable.filter(e => e.code === code || (/\d$/.test(code) && e.code.startsWith(code)));
+  if (day) hits = hits.filter(e => e.day === day);
+  return hits;
+}
+function formatSchedule(code, hits, allHits, day) {
+  if (!hits.length) {
+    if (!allHits.length) return `**${code}** was not found in the timetable.`;
+    const days = [...new Set(allHits.map(e => e.day))].sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
+    return `**${code}** does not appear to be scheduled on ${day}. It is scheduled on: ${days.join(", ")}.`;
+  }
+  const label = e => { let s = e.time; if (e.group) s += ` (Group ${e.group})`; if (e.code !== code) s += ` [${e.code}]`; return s; };
+  const byDay = new Map();
+  const sorted = [...hits].sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  for (const e of sorted) { if (!byDay.has(e.day)) byDay.set(e.day, []); byDay.get(e.day).push(label(e)); }
+  if (day) return `**${code}** on ${day}: ${byDay.get(day).join(", ")}`;
+  const lines = [`**${code}** is scheduled as follows:`];
+  for (const [d, times] of byDay) lines.push(`- ${d}: ${times.join(", ")}`);
+  return lines.join("\n");
+}
+
+/* ---- 2. calendar ---- */
+const isCalendarQuery = q => tokenize(q).some(w => CAL_TRIGGERS.has(w));
+function searchCalendar(kb, query, maxHits = 3) {
+  let q = query.toLowerCase();
+  for (const [re, rep] of CAL_SYNONYMS) q = q.replace(re, rep);
+  const words = tokenize(q), wordset = new Set(words);
+  const intent = words.some(w => START_WORDS.has(w)) ? "start" : words.some(w => END_WORDS.has(w)) ? "end" : null;
+  const month = MONTHS.find(m => wordset.has(m.toLowerCase())) || null;
+  const content = words.filter(w => !CAL_STOP.has(w) && !DAY_WORDS[w] && !(w.toUpperCase() in MONTH_INDEX));
+  const present = content.filter(w => (kb.calDf.get(stem(w, 4)) || 0) >= 1);
+  if (!present.length) return [];
+  let anchor = present[0];
+  for (const w of present) if (kb.calIdf(w) > kb.calIdf(anchor)) anchor = w;
+  const scored = [];
+  kb.calendar.forEach((event, i) => {
+    const stems = kb.calStems[i];
+    if (month && event[0] !== month) return;
+    const matched = present.filter(w => stems.has(stem(w, 4)));
+    if (!matched.length || !stems.has(stem(anchor, 4))) return;
+    const textL = event[3].toLowerCase();
+    let score = matched.reduce((s, w) => s + kb.calIdf(w), 0) / Math.sqrt(stems.size);
+    if (intent === "start" && ["start of", "opening", "university re-opens"].some(p => textL.startsWith(p))) score *= 1.5;
+    if (intent === "end" && ["end of", "closure", "last day"].some(p => textL.startsWith(p))) score *= 1.5;
+    scored.push([score, event]);
+  });
+  scored.sort((a, b) => b[0] - a[0] || MONTH_INDEX[a[1][0]] - MONTH_INDEX[b[1][0]] || a[1][1] - b[1][1]);
+  if (!scored.length) return [];
+  const best = scored[0][0];
+  return scored.filter(s => s[0] >= 0.75 * best).slice(0, maxHits).map(s => s[1]);
+}
+const titleCase = s => s.charAt(0) + s.slice(1).toLowerCase();
+const fmtDate = e => `${e[2]} ${e[1]} ${titleCase(e[0])} 2026`;
+function formatCalendar(kb, hits) {
+  if (!hits.length) return null;
+  const sorted = [...hits].sort((a, b) => MONTH_INDEX[a[0]] - MONTH_INDEX[b[0]] || a[1] - b[1]);
+  return sorted.map(ev => {
+    let line = `- **${fmtDate(ev)}**: ${ev[3]}`;
+    const m = ev[3].match(/^start of (.*)$/i);
+    if (m) {
+      const key = m[1].trim().toLowerCase();
+      const ends = kb.calendar.filter(e => e[3].toLowerCase() === `end of ${key}`);
+      if (ends.length === 1) line += ` (ends ${fmtDate(ends[0])})`;
+    }
+    return line;
+  }).join("\n");
+}
+
+/* ---- 3. handbook (BM25) ---- */
+function queryStems(query) {
+  for (const [re, rep] of HB_SYNONYMS) query = query.replace(re, rep);
+  query = query.toUpperCase().replace(CODE_RE_G, m => /[A-Z]$/.test(m) ? m.slice(0, -1) : m);
+  return tokenize(query).filter(w => !HB_STOP.has(w)).map(w => stem(w, 5));
+}
+function retrieve(kb, query, topK = 3) {
+  const qStems = queryStems(query);
+  if (!qStems.length) return [];
+  const unique = new Set(qStems);
+  const scores = kb.bm25.scores(qStems);
+  const boosted = [];
+  scores.forEach((base, i) => {
+    if (base <= 0) return;
+    const heading = new Set(tokenize(kb.chunks[i].slice(0, 80)).map(t => stem(t, 5)));
+    const chunkStems = new Set(tokenize(kb.chunks[i]).map(t => stem(t, 5)));
+    boosted.push([base + 2.0 * intersectSize(heading, unique), i, intersectSize(chunkStems, unique) / unique.size]);
+  });
+  boosted.sort((a, b) => b[0] - a[0] || b[1] - a[1]);
+  const results = [], taken = [];
+  for (const [score, i, coverage] of boosted) {
+    if (taken.some(j => Math.abs(i - j) <= 1)) continue;
+    results.push([score, kb.chunks[i], coverage, i]); taken.push(i);
+    if (results.length >= topK) break;
+  }
+  return results;
+}
+function trimText(text, limit = 900) {
+  text = text.replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "), cut.lastIndexOf(": "));
+  if (end > 200) return cut.slice(0, end + 1).trim();
+  return (cut.slice(0, cut.lastIndexOf(" ")) + " ...").trim();
+}
+
+/* ---- router ---- */
+function answerQuery(kb, query) {
+  query = query.trim();
+  if (!query) return {text: "Please type a question.", source: "none", context: []};
+  const code = findModuleCode(query);
+  if (code && isScheduleQuestion(query)) {
+    const day = findDay(query), all = lookupSchedule(kb, code);
+    const hits = day ? lookupSchedule(kb, code, day) : all;
+    return {text: formatSchedule(code, hits, all, day), source: "timetable", context: []};
+  }
+  if (isCalendarQuery(query)) {
+    const hits = searchCalendar(kb, query), text = formatCalendar(kb, hits);
+    if (text) return {text, source: "calendar", context: hits.map(h => `${fmtDate(h)}: ${h[3]}`)};
+  }
+  const results = retrieve(kb, query);
+  if (!results.length || results[0][0] < BM25_THRESHOLD || results[0][2] < MIN_COVERAGE)
+    return {text: OUT_OF_SCOPE, source: "none", context: []};
+  const start = kb.chunkStart[results[0][3]];
+  let section = kb.lines.slice(start, start + 16).join(" ");
+  const nxt = section.indexOf(" Title ", 10);
+  if (nxt !== -1) section = section.slice(0, nxt);
+  return {text: "According to the handbook: " + trimText(section, 900), source: "handbook", context: results.map(r => r[1])};
+}
+
+if (typeof globalThis !== "undefined") globalThis.__chatbot = {KnowledgeBase, answerQuery};
+
+/* ======================================================================
+   Page (only runs in a browser)
+   ====================================================================== */
+if (typeof document !== "undefined") {
+  const chat = document.getElementById("chat"), status = document.getElementById("status");
+  const form = document.getElementById("form"), input = document.getElementById("q");
+  let kb = null;
+
+  const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  function render(md) {  // tiny markdown: **bold** and "- " lists
+    const out = []; let list = [];
+    const flush = () => { if (list.length) { out.push("<ul style='margin:.2em 0 .2em 1.1em;padding:0'>" + list.map(x => `<li>${x}</li>`).join("") + "</ul>"); list = []; } };
+    for (const line of md.split("\n")) {
+      const html = esc(line).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+      if (line.startsWith("- ")) list.push(html.slice(2)); else { flush(); out.push(`<p>${html}</p>`); }
+    }
+    flush(); return out.join("");
+  }
+  function add(role, html, extra) {
+    const row = document.createElement("div"); row.className = "row " + role;
+    row.innerHTML = `<div class="avatar">${role === "user" ? "🙂" : "🤖"}</div><div class="bubble">${html}</div>`;
+    if (extra) row.querySelector(".bubble").appendChild(extra);
+    chat.appendChild(row); row.scrollIntoView({block: "end", behavior: "smooth"});
+  }
+  function ask(q) {
+    if (!q.trim()) return;
+    add("user", `<p>${esc(q)}</p>`);
+    if (!kb) { add("bot", "<p>The knowledge base is still loading. Please try again in a moment.</p>"); return; }
+    const a = answerQuery(kb, q), extra = document.createElement("div");
+    let h = "";
+    if (a.context.length) h += `<details><summary>Show retrieved source text (verify this answer yourself)</summary>${a.context.map(c => `<pre>${esc(c)}</pre>`).join("")}</details>`;
+    h += `<div class="src">Answered from: ${a.source}</div>`;
+    extra.innerHTML = h;
+    add("bot", render(a.text), extra);
+  }
+  form.addEventListener("submit", e => { e.preventDefault(); const q = input.value; input.value = ""; ask(q); });
+
+  const examples = ["At what time is 5EEE421L on Monday?", "Is 5EEE421L scheduled on Tuesday?", "When does the first semester start?",
+    "When do the second semester exams start?", "What is the DP requirement?", "What is the entry requirement for engineering?"];
+  const chips = document.getElementById("chips");
+  for (const ex of examples) { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = ex; b.onclick = () => ask(ex); chips.appendChild(b); }
+
+  Promise.all(["timetable_entries", "calendar_events", "handbook_chunks", "handbook_lines"].map(n =>
+    fetch(`data/processed/${n}.json`).then(r => { if (!r.ok) throw new Error(`${n}.json: HTTP ${r.status}`); return r.json(); })
+  )).then(([t, c, ch, l]) => {
+    kb = new KnowledgeBase(t, c, ch, l);
+    status.textContent = "Ready. Ask a question or tap an example.";
+  }).catch(err => {
+    status.innerHTML = "⚠️ Could not load the data files (" + esc(String(err.message || err)) + "). Make sure the four .json files are in data/processed/ in your repository, and open this page from its GitHub Pages link (not by double-clicking the file).";
+  });
+}
+</script>
+</body>
+</html>
