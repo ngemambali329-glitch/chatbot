@@ -1,0 +1,12 @@
+{
+  "name": "UniZulu Engineering Chatbot",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "hostRequirements": { "cpus": 4, "memory": "8gb" },
+  "postCreateCommand": "pip install -r requirements-dev.txt && python scripts/build_knowledge.py && (pip install -r requirements-llm.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu || echo 'Language-model extras not installed: the chatbot still works without them.')",
+  "postAttachCommand": "USE_LLM=1 streamlit run app.py --server.port 8501 --server.headless true --server.enableCORS false --server.enableXsrfProtection false",
+  "forwardPorts": [8501],
+  "portsAttributes": {
+    "8501": { "label": "Chatbot", "onAutoForward": "openBrowser" }
+  },
+  "customizations": { "vscode": { "extensions": ["ms-python.python"] } }
+}
