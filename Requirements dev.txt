@@ -1,0 +1,3 @@
+-r requirements.txt
+pdfplumber>=0.11   # only needed to rebuild the knowledge files from the raw timetable PDF
+pytest>=8
