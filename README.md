@@ -15,6 +15,14 @@ How an answer is produced:
 The interface is [Streamlit](https://streamlit.io). The language model runs on the CPU through
 [llama.cpp](https://github.com/ggml-org/llama.cpp) and is optional.
 
+## Web version with document upload (GitHub Pages)
+
+`index.html` is a complete chatbot that runs in the browser. Turn on **Settings → Pages → Deploy from a branch → main / (root)**
+and open the link GitHub shows. Use the **Knowledge base** panel to upload PDF, Word (.docx), text, Markdown or CSV files; the chatbot
+splits them into sections, ranks them with BM25 and answers from the best match, naming the file and page. Uploaded documents stay in
+the visitor's own browser (they are never sent to a server) and can be removed at any time. If `data/processed/` is present the page also
+offers the built-in UniZulu timetable, calendar and handbook.
+
 ## Run it on GitHub (Codespaces)
 
 1. Push this folder to a new GitHub repository. (`data/processed/` is optional: the Codespace builds it from `data/raw/` by itself.)
